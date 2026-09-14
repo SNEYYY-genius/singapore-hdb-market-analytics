@@ -21,6 +21,7 @@ with_previous_year AS (
         transactions,
         months_present,
         median_price_per_sqm,
+        LAG(year) OVER (PARTITION BY town ORDER BY year) AS previous_year,
         LAG(transactions) OVER (
             PARTITION BY town ORDER BY year
         ) AS previous_year_transactions,
@@ -40,7 +41,7 @@ SELECT
     months_present,
     ROUND(median_price_per_sqm, 2) AS median_price_per_sqm,
     CASE
-        WHEN months_present = 12 AND previous_year_months_present = 12
+        WHEN months_present = 12 AND previous_year_months_present = 12 AND previous_year = year - 1
         THEN ROUND(
             100.0 * (transactions - previous_year_transactions)
             / NULLIF(previous_year_transactions, 0),
@@ -48,7 +49,7 @@ SELECT
         )
     END AS transaction_growth_pct,
     CASE
-        WHEN months_present = 12 AND previous_year_months_present = 12
+        WHEN months_present = 12 AND previous_year_months_present = 12 AND previous_year = year - 1
         THEN ROUND(
             100.0 * (median_price_per_sqm - previous_year_price_per_sqm)
             / NULLIF(previous_year_price_per_sqm, 0),
@@ -56,7 +57,7 @@ SELECT
         )
     END AS price_growth_pct,
     CASE
-        WHEN months_present = 12 AND previous_year_months_present = 12
+        WHEN months_present = 12 AND previous_year_months_present = 12 AND previous_year = year - 1
         THEN 'Comparable full years'
         ELSE 'Not comparable: partial or missing year'
     END AS comparison_status

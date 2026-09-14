@@ -1,4 +1,8 @@
-# Singapore HDB Resale Market — Key Findings
+# Singapore HDB Resale Market — Exploratory Findings
+
+This report documents notebooks 01–08 and the retrospective 2024–2025 opportunity matrix. For the final January–August 2026 screen and historical validation, read the [final opportunity report](../outputs/improved_opportunity/findings.md). Its categories use a different period and stricter criteria; the nine Priority segments below are exploratory results.
+
+Data source: Housing & Development Board via [data.gov.sg](https://data.gov.sg/datasets/d_8b84c4ee58e3cfc0ece0d773c8ca6abc/view), under the [Singapore Open Data Licence](https://data.gov.sg/open-data-licence).
 
 ## 1. Market Overview
 
@@ -170,7 +174,7 @@ Holding the other included characteristics constant:
 - Each additional year of remaining lease was associated with approximately 1.03% higher resale price.
 - Each additional storey level was associated with approximately 0.79% higher resale price.
 
-A robustness model using price per square metre produced nearly identical estimates for remaining lease and storey, suggesting that these relationships were not driven solely by differences in flat size.
+A robustness model using log price per square metre produced nearly identical estimates for remaining lease and storey, suggesting that these relationships were not driven solely by differences in flat size.
 
 ### Location Effects
 
@@ -189,6 +193,7 @@ Even after controlling for floor area, flat type remained strongly associated wi
 The regression results represent conditional associations rather than causal effects. The model does not directly account for factors such as exact MRT distance, nearby amenities, renovation quality, orientation, view, or block-specific characteristics.
 
 ## 8. Market Segmentation
+
 - The dataset contains 239,330 transactions from January 2017 through August 2026. Both 2024 and 2025 have all 12 observed months. Historical summaries include partial-year 2026; growth compares only 2025 with 2024.
 - There are 131 Town × Flat Type segments. The 500 historical / 30 per comparison-year screen retains 85. Annual thresholds of 20, 30, and 50 all retain the same 85 segments and 19 positive-momentum segments.
 - Sengkang × 4 Room leads historical transaction count (9,666), followed by Punggol × 4 Room (9,170). These also lead cumulative transaction value at approximately S$4.996 billion and S$4.991 billion.
@@ -227,7 +232,7 @@ The nine Priority segments recorded 4,036 transactions and approximately S$2.737
 
 Changing the size cutoff to the 40th, 50th and 60th percentiles produced 10, 9 and 8 Priority segments. Eight remained Priority throughout: Tampines × 4 Room, Sembawang × 4 Room, Tampines × 5 Room, Toa Payoh × 3 Room, Toa Payoh × 4 Room, Bukit Panjang × 4 Room, Hougang × 3 Room and Sembawang × 5 Room.
 
-Clementi × 4 Room sits exactly at the baseline 209-transaction size boundary and leaves Priority under the stricter cutoff. Its large median price increase coincides with a shift toward longer remaining leases in Step 17's composition check.
+Clementi × 4 Room sits exactly at the baseline 209-transaction size boundary and leaves Priority under the stricter cutoff. Its large median price increase coincides with a shift toward longer remaining leases in notebook 07's composition check.
 
 There are 20 activity-growing segments across Priority and Emerging, compared with 19 segments showing both positive activity and positive price growth. The difference is Geylang × 5 Room: transaction growth was +16.39% while median price-per-sqm growth was -0.27%.
 

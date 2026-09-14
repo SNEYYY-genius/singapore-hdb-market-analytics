@@ -6,6 +6,6 @@
   "priority_positive_next_year_share": 0.21428571428571427,
   "all_positive_next_year_share": 0.2676056338028169,
   "signal_outcome_spearman": -0.3693891581012425,
-  "signal_outcome_spearman_p_value": 0.0009603070141013644,
+  "signal_outcome_spearman_p_value": 0.0015232962617926485,
   "conclusion": "The stricter signal did not show forward separation in this single backtest."
 }

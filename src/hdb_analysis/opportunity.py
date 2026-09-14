@@ -12,13 +12,16 @@ It intentionally does not modify the source dataset.
 from __future__ import annotations
 
 import argparse
+import calendar
 import json
 import math
+import warnings
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import statsmodels.formula.api as smf
+from scipy.stats import spearmanr
 
 
 REQUIRED_COLUMNS = {
@@ -50,7 +53,7 @@ def rate_ratio_interval(current: float, base: float) -> tuple[float, float]:
     return lower, upper
 
 
-def model_adjusted_growth(segment: pd.DataFrame, base_year: int, current_year: int) -> dict[str, float]:
+def model_adjusted_growth(segment: pd.DataFrame, base_year: int, current_year: int) -> dict[str, float | str]:
     """Estimate a period effect on log price/sqm while controlling for sale mix."""
     work = segment.copy()
     work["current_period"] = (work["year"] == current_year).astype(int)
@@ -67,15 +70,22 @@ def model_adjusted_growth(segment: pd.DataFrame, base_year: int, current_year: i
             "log_price_per_sqm ~ current_period + floor_area_sqm + "
             "remaining_lease_years_numeric + storey_midpoint + C(flat_model_grouped) + C(month_number)",
             data=work,
-        ).fit(cov_type="HC3")
-        coefficient = float(result.params["current_period"])
-        low, high = (float(value) for value in result.conf_int().loc["current_period"])
+        ).fit()
+        # HC3 is undefined for observations with unit leverage (e.g. singleton
+        # categories). Mark that model unavailable instead of emitting infinities.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            result = result.get_robustcov_results(cov_type="HC3", use_t=False)
+        period_index = result.model.exog_names.index("current_period")
+        coefficient = float(result.params[period_index])
+        low, high = (float(value) for value in result.conf_int()[period_index])
         if not np.isfinite([coefficient, low, high]).all():
             raise ValueError("Non-finite adjusted price estimate")
         n = int(result.nobs)
         adjusted_r_squared = float(result.rsquared_adj)
-        p_value = float(result.pvalues["current_period"])
+        p_value = float(result.pvalues[period_index])
         return {
+            "adjusted_price_model_status": "ok",
             "adjusted_price_growth": math.exp(coefficient) - 1.0,
             "adjusted_price_growth_ci_low": math.exp(low) - 1.0,
             "adjusted_price_growth_ci_high": math.exp(high) - 1.0,
@@ -83,8 +93,9 @@ def model_adjusted_growth(segment: pd.DataFrame, base_year: int, current_year: i
             "adjusted_price_model_n": n,
             "adjusted_price_model_r2": adjusted_r_squared,
         }
-    except Exception:
+    except (ValueError, RuntimeWarning, np.linalg.LinAlgError, OverflowError) as error:
         return {
+            "adjusted_price_model_status": f"unavailable: {error}",
             "adjusted_price_growth": math.nan,
             "adjusted_price_growth_ci_low": math.nan,
             "adjusted_price_growth_ci_high": math.nan,
@@ -112,11 +123,18 @@ def composition_shift(segment: pd.DataFrame, base_year: int, current_year: int) 
 
     base_mix = base["flat_model"].value_counts(normalize=True)
     current_mix = current["flat_model"].value_counts(normalize=True)
-    model_share_change = float((current_mix - base_mix).fillna(0).abs().max())
+    model_share_change = float(current_mix.subtract(base_mix, fill_value=0).abs().max())
     if model_share_change >= 0.15:
         reasons.append(f"flat-model share shift {model_share_change:.0%}")
 
     return bool(reasons), "; ".join(reasons)
+
+
+def validate_period_coverage(df: pd.DataFrame, years: tuple[int, ...], months: int) -> None:
+    for year in years:
+        present = set(df.loc[df["year"].eq(year), "month"].dt.month)
+        if not set(range(1, months + 1)).issubset(present):
+            raise ValueError(f"Incomplete January-{calendar.month_name[months]} coverage for {year}")
 
 
 def build_segment_screen(
@@ -125,6 +143,9 @@ def build_segment_screen(
     current_year: int,
     months: int,
 ) -> pd.DataFrame:
+    if not 1 <= months <= 12 or current_year <= base_year:
+        raise ValueError("Use 1-12 months and a current year after the base year")
+    validate_period_coverage(df, (base_year, current_year), months)
     comparison = df[
         df["year"].isin([base_year, current_year]) & (df["month"].dt.month <= months)
     ].copy()
@@ -135,7 +156,7 @@ def build_segment_screen(
     count_table = (
         comparison.groupby(["town", "flat_type", "year"])
         .size()
-        .unstack("year")
+        .unstack("year", fill_value=0)
         .reindex(columns=[base_year, current_year], fill_value=0)
         .rename(columns={base_year: "transactions_base", current_year: "transactions_current"})
     )
@@ -143,9 +164,10 @@ def build_segment_screen(
     price_table = comparison.groupby(["town", "flat_type", "year"])["price_per_sqm"].median().unstack("year")
 
     output = count_table.join(history_counts, how="left").reset_index()
+    output["history_transactions"] = output["history_transactions"].fillna(0).astype(int)
     output["segment"] = output["town"].str.title() + " × " + output["flat_type"].str.title()
     output["transaction_value_current"] = [
-        value_table.loc[(row.town, row.flat_type), current_year] for row in output.itertuples()
+        value_table.loc[(row.town, row.flat_type), current_year] if row.transactions_current else 0 for row in output.itertuples()
     ]
     output["median_price_per_sqm_base"] = [
         price_table.loc[(row.town, row.flat_type), base_year] for row in output.itertuples()
@@ -153,7 +175,7 @@ def build_segment_screen(
     output["median_price_per_sqm_current"] = [
         price_table.loc[(row.town, row.flat_type), current_year] for row in output.itertuples()
     ]
-    output["transaction_growth"] = output["transactions_current"] / output["transactions_base"] - 1.0
+    output["transaction_growth"] = output["transactions_current"] / output["transactions_base"].replace(0, np.nan) - 1.0
     output["unadjusted_price_growth"] = (
         output["median_price_per_sqm_current"] / output["median_price_per_sqm_base"] - 1.0
     )
@@ -178,6 +200,7 @@ def build_segment_screen(
             shifted, shift_reason = composition_shift(segment, base_year, current_year)
         else:
             model_result = {
+                "adjusted_price_model_status": "insufficient sample",
                 "adjusted_price_growth": math.nan,
                 "adjusted_price_growth_ci_low": math.nan,
                 "adjusted_price_growth_ci_high": math.nan,
@@ -237,7 +260,7 @@ def build_segment_screen(
 
     output["category"] = output.apply(classify, axis=1)
     output["size_cutoff_transactions"] = size_cutoff
-    output["comparison"] = f"Jan-Aug {current_year} vs Jan-Aug {base_year}"
+    output["comparison"] = f"Jan-{calendar.month_abbr[months]} {current_year} vs Jan-{calendar.month_abbr[months]} {base_year}"
     output["period_months"] = months
 
     category_order = {
@@ -258,33 +281,24 @@ def build_segment_screen(
 
 
 def backtest(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float | int | str]]:
+    validate_period_coverage(df, (2023, 2024, 2025), 8)
     signal = build_segment_screen(df, base_year=2023, current_year=2024, months=8)
     outcome = (
         df[df["year"].isin([2024, 2025]) & (df["month"].dt.month <= 8)]
         .groupby(["town", "flat_type", "year"])
         .size()
-        .unstack("year")
+        .unstack("year", fill_value=0)
         .reindex(columns=[2024, 2025], fill_value=0)
     )
-    outcome["next_year_growth"] = outcome[2025] / outcome[2024] - 1.0
+    outcome["next_year_growth"] = outcome[2025] / outcome[2024].replace(0, np.nan) - 1.0
     merged = signal.merge(outcome[["next_year_growth"]].reset_index(), on=["town", "flat_type"], how="left")
     tested = merged[merged["eligible"] & np.isfinite(merged["next_year_growth"])].copy()
     priority = tested[tested["category"] == "Priority"]
     non_priority = tested[tested["category"] != "Priority"]
-    signal_rank = tested["transaction_growth"].rank(method="average")
-    outcome_rank = tested["next_year_growth"].rank(method="average")
-    correlation = float(signal_rank.corr(outcome_rank))
-    correlation_stat = (
-        correlation * math.sqrt((len(tested) - 2) / max(1.0 - correlation**2, 1e-12))
-        if len(tested) > 2 and np.isfinite(correlation)
-        else math.nan
-    )
-    # Large-sample normal approximation to the usual correlation t statistic.
-    correlation_p = (
-        float(math.erfc(abs(correlation_stat) / math.sqrt(2)))
-        if np.isfinite(correlation_stat)
-        else math.nan
-    )
+    if len(tested) > 2 and tested["transaction_growth"].nunique() > 1 and tested["next_year_growth"].nunique() > 1:
+        correlation, correlation_p = spearmanr(tested["transaction_growth"], tested["next_year_growth"])
+    else:
+        correlation, correlation_p = math.nan, math.nan
     summary: dict[str, float | int | str] = {
         "eligible_segments": int(len(tested)),
         "priority_segments": int(len(priority)),
@@ -321,23 +335,25 @@ def write_report(
     total_growth = total_current / total_base - 1
 
     lines = [
-        "# Improved HDB opportunity analysis",
+        "# Singapore HDB Resale Market — Final Opportunity Findings",
+        "",
+        "This is the final screen for the fixed January 2017–August 2026 snapshot. The earlier [exploratory report](../../reports/findings.md) uses a different period and classification method.",
         "",
         "## Executive result",
         "",
         f"The market recorded {total_current:,} transactions in January-August 2026, {pct(total_growth)} versus the same months of 2025.",
         f"The stricter screen retained {len(eligible)} adequately sampled segments and classified {len(priorities)} as Priority and {len(emerging)} as Emerging.",
         "",
-        "Priority now requires a large current market, at least 5% transaction growth, a 95% count-growth interval above zero, and non-negative composition-adjusted price growth. This avoids treating tiny positive changes as strong momentum.",
+        f"Priority requires at least {screen['size_cutoff_transactions'].iloc[0]:g} current-period transactions (the eligible-segment median), at least 5% transaction growth, a 95% count-growth interval above zero, and non-negative composition-adjusted price growth. Emerging applies below the same size threshold and requires at least 10% transaction growth, with the same uncertainty and adjusted-price criteria.",
         "",
-        "## Current Priority segments",
+        "## Current shortlist",
         "",
-        "| Segment | 2026 YTD transactions | Volume growth | 95% interval | Adjusted price growth | 95% interval | Three-year volume CAGR |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| Category | Segment | 2026 YTD transactions | Volume growth | 95% interval | Adjusted price growth | 95% interval | Three-year volume CAGR |",
+        "|---|---|---:|---:|---:|---:|---:|---:|",
     ]
-    for row in priorities.itertuples():
+    for row in screen[screen["category"].isin(["Priority", "Emerging"])].itertuples():
         lines.append(
-            f"| {row.segment} | {int(row.transactions_current):,} | {pct(row.transaction_growth)} | "
+            f"| {row.category} | {row.segment} | {int(row.transactions_current):,} | {pct(row.transaction_growth)} | "
             f"{pct(row.transaction_growth_ci_low)} to {pct(row.transaction_growth_ci_high)} | "
             f"{pct(row.adjusted_price_growth)} | {pct(row.adjusted_price_growth_ci_low)} to "
             f"{pct(row.adjusted_price_growth_ci_high)} | {pct(row.three_year_transaction_cagr)} |"
@@ -347,10 +363,12 @@ def write_report(
         "",
         "## What changed from the original method",
         "",
-        "- The comparison is January-August 2026 versus January-August 2025, so it uses the freshest complete matched-month period.",
+        "- The comparison is January-August 2026 versus January-August 2025, using the latest matched-month window in the fixed snapshot.",
         f"- Eligibility uses at least {MIN_HISTORY} transactions known by August 2025 and at least {MIN_PERIOD} transactions in each comparison period.",
         f"- Material volume growth is at least {MATERIAL_GROWTH:.0%}; statistical support requires the approximate 95% rate-ratio interval to stay above zero.",
         "- Adjusted price growth comes from a segment-level log-price-per-sqm regression controlling for floor area, remaining lease, storey, flat model and calendar month, with HC3 robust standard errors.",
+        "- Adjusted-price models with undefined robust uncertainty are marked unavailable in the CSV and cannot qualify for Priority or Emerging.",
+        "- Count intervals are per-segment approximations; they do not correct for testing multiple segments. A non-negative adjusted price point estimate does not establish statistically significant price growth.",
         "- Composition flags identify material shifts in median lease, storey, area or flat-model shares.",
         "- Historical eligibility stops before the current period, preventing future-data leakage.",
         "",
@@ -366,7 +384,7 @@ def write_report(
         "",
         str(backtest_summary["conclusion"]),
         "",
-        "A single backtest is evidence, not proof. The category remains a commercial research screen rather than an investment-return forecast.",
+        "The Spearman p-value uses SciPy's asymptotic calculation. Adjacent growth rates share the middle year, which can itself induce negative correlation; this result does not establish a reversal mechanism. A single backtest is evidence, not proof. The category remains a commercial research screen rather than an investment-return forecast.",
         "",
         "## Remaining data gap",
         "",
@@ -378,6 +396,9 @@ def write_report(
         f"- Coverage: {df['month'].min():%B %Y} to {df['month'].max():%B %Y}",
         f"- Missing values in required analytical columns: {int(df[list(REQUIRED_COLUMNS)].isna().sum().sum()):,}",
         f"- Exact duplicate rows retained in source: {int(df.duplicated().sum()):,}",
+        "- Identical published rows are retained because there is no unique transaction identifier to establish that they represent duplicate sales.",
+        "",
+        "Source: Housing & Development Board, [Resale flat prices based on registration date from Jan-2017 onwards](https://data.gov.sg/datasets/d_8b84c4ee58e3cfc0ece0d773c8ca6abc/view), under the [Singapore Open Data Licence](https://data.gov.sg/open-data-licence). See [data provenance](../../data/README.md).",
     ])
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
