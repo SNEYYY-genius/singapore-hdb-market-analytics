@@ -1,0 +1,4 @@
+size_percentile,transaction_cutoff,priority_segments
+40.0,175.60000000000002,10
+50.0,209.0,9
+60.0,273.0,8
