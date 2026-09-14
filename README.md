@@ -5,7 +5,7 @@ An end-to-end analysis of **239,330 HDB resale transactions from January 2017 to
 ## Start here
 
 - [Final opportunity findings](outputs/improved_opportunity/findings.md): the current segment screen, uncertainty estimates, and historical validation.
-- [Exploratory findings](reports/findings.md): market overview, price drivers, regression results, and the earlier 2024–2025 opportunity matrix.
+- [Exploratory findings](reports/exploratory_findings.md): market overview, price drivers, regression results, and the earlier 2024–2025 opportunity matrix.
 - [Data provenance](data/README.md): source, snapshot coverage, cleaning decisions, and licence.
 
 ## Main findings
@@ -71,7 +71,7 @@ notebooks/                        Exploratory workflow, numbered 01–08
 sql/                              Four reusable DuckDB query files
 src/hdb_analysis/                 Final opportunity analysis and backtest
 tests/                            Automated data, analysis, and SQL checks
-reports/findings.md               Exploratory findings
+reports/exploratory_findings.md   Exploratory findings
 outputs/
   hdb_*.csv                       Exploratory analytical tables
   improved_opportunity/           Final screen, backtest, and generated report

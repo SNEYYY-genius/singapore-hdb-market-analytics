@@ -1,6 +1,6 @@
 # Singapore HDB Resale Market — Final Opportunity Findings
 
-This is the final screen for the fixed January 2017–August 2026 snapshot. The earlier [exploratory report](../../reports/findings.md) uses a different period and classification method.
+This is the final screen for the fixed January 2017–August 2026 snapshot. The earlier [exploratory report](../../reports/exploratory_findings.md) uses a different period and classification method.
 
 ## Executive result
 
